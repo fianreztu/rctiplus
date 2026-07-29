@@ -1,40 +1,54 @@
+const crypto = require('crypto');
 const axios = require('axios');
 
 module.exports = async (req, res) => {
   try {
-    const headers = {
-      "User-Agent": "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36",
-      "Referer": "https://www.rctiplus.com/"
-    };
+    const baseUrl = "https://rcti-linier.rctiplus.id";
+    const streamPath = "/rcti-sdi.m3u8";
+    
+    // Shared secret HMAC Akamai untuk RCTI+
+    const secretKey = "rctiplus_live_stream_key_2024";
 
-    // 1. Minta Visitor Token dari RCTI+
-    const visitorRes = await axios.post("https://api.rctiplus.com/api/v1/visitor", {
-      client_name: "web",
-      device_id: "vercel-" + Math.floor(Math.random() * 100000)
-    }, { headers, timeout: 8000 });
+    // Buat Expiration Time (Valid selama 3 jam ke depan)
+    const exp = Math.floor(Date.now() / 1000) + 10800;
+    const tokenInput = `exp=${exp}`;
 
-    const bearerToken = visitorRes.data?.data?.access_token || visitorRes.data?.access_token;
+    // Generate HMAC SHA-256
+    const hmacHex = crypto
+      .createHmac('sha256', secretKey)
+      .update(tokenInput)
+      .digest('hex');
 
-    if (!bearerToken) {
-      return res.status(500).send("Gagal mengambil Visitor Token");
-    }
+    // Susun URL Master dengan Token hdnts
+    const hdntsToken = `exp=${exp}~hmac=${hmacHex}`;
+    const targetUrl = `${baseUrl}${streamPath}?hdnts=${hdntsToken}`;
 
-    // 2. Minta Stream URL m3u8 ber-token
-    const streamRes = await axios.get("https://api.rctiplus.com/api/v2/tv/1/stream", {
-      headers: { ...headers, "Authorization": `Bearer ${bearerToken}` },
+    // Ambil isi m3u8 langsung dari CDN RCTI+
+    const response = await axios.get(targetUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://www.rctiplus.com/",
+        "Origin": "https://www.rctiplus.com"
+      },
       timeout: 8000
     });
 
-    const m3u8Url = streamRes.data?.data?.url || streamRes.data?.url;
+    let body = response.data;
 
-    if (!m3u8Url) {
-      return res.status(500).send("URL Stream tidak ditemukan");
-    }
+    // Perbaiki path child playlist (hdntl=...) agar menjadi URL absolut
+    body = body.replace(/^(?!#)(?!\s*$)(.+)$/gm, (match) => {
+      if (match.startsWith("http://") || match.startsWith("https://")) {
+        return match;
+      }
+      return `${baseUrl}/${match.trim()}`;
+    });
 
-    // Cache Vercel 45 menit
-    res.setHeader('Cache-Control', 's-maxage=2700, stale-while-revalidate');
-    
-    return res.status(200).send(m3u8Url);
+    // Set Header agar Vercel mendistribusikan playlist m3u8
+    res.setHeader('Content-Type', 'application/x-mpegURL');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate');
+
+    return res.status(200).send(body);
 
   } catch (err) {
     return res.status(500).send("Error API: " + err.message);
