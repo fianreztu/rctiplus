@@ -1,0 +1,6 @@
+{
+  "rewrites": [
+    { "source": "/api/get-rcti", "destination": "/api/get-rcti.js" },
+    { "source": "/", "destination": "/api/index.js" }
+  ]
+}
